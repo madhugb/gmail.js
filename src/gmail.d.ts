@@ -54,6 +54,32 @@ declare type GmailPageType =
    */
 declare type GmailEmailAddress = string[];
 
+declare type GmailAttachmentDetails = {
+    attachment_id: string,
+    name: string,
+    type: string,
+    size: number,
+    url: string
+};
+
+declare type GmailEmailDetails = {
+    is_deleted: boolean,
+    reply_to: string,
+    reply_to_id: string,
+    from: string,
+    from_email: string,
+    timestamp: number,
+    datetime: string,
+    attachments: string[],
+    attachments_details: GmailAttachmentDetails[],
+    subject: string,
+    content_html: string,
+    content_plain: string,
+    to: string[],
+    cc: string[],
+    bcc: string[]
+};
+
 declare type GmailEmailData = {
     thread_id: string,
     first_email: string,
@@ -63,45 +89,40 @@ declare type GmailEmailData = {
     people_involved: GmailEmailAddress[];
     subject: string;
     threads: {
-        [id: string]: {
-            is_deleted: boolean,
-            reply_to: string,
-            reply_to_id: string,
-            from: string,
-            from_email: string,
-            timestamp: number,
-            datetime: string,
-            attachments: string[],
-            subject: string,
-            content_html: string,
-            content_plain: string,
-            to: string[],
-            cc: string[],
-            bcc: string[]
-        }
+        [id: string]: GmailEmailDetails
     };
+};
+
+declare type GmailLastActive = {
+    time: string,
+    ip: string,
+    mac_address: string,
+    time_relative: string
+};
+
+declare type GmailLoggedInAccount = {
+    name: string,
+    email: string,
+    index: number
+};
+
+declare type GmailStorageInfo = {
+    used: string,
+    total: string,
+    percent: number
 };
 
 interface GmailGet {
     /**
        Gets user's account activity data
     */
-    last_active(): {
-        time: string,
-        ip: string,
-        mac_address: string,
-        time_relative: string
-    };
+    last_active(): GmailLastActive;
 
     /**
        Returns a list of signed-in accounts (multiple user accounts
        setup in gmail)
      */
-    loggedin_accounts(): {
-        name: string,
-        email: string,
-        index: number
-    }[];
+    loggedin_accounts(): GmailLoggedInAccount[];
 
     /**
        Returns the current user's email address
@@ -127,11 +148,7 @@ interface GmailGet {
     /**
        Returns current user's file storage stats
      */
-    storage_info(): {
-        used: string,
-        total: string,
-        percent: number
-    };
+    storage_info(): GmailStorageInfo;
 
     email_ids(): string[];
     /**
@@ -221,17 +238,34 @@ interface GmailGet {
     */
     email_data_async(email_id: string, callback: (email_data: GmailEmailData) => void): void;
     /**
-       Retrieves raw MIME message source from the gmail server for the
-       specified email id. It takes the optional email_id parameter
-       where the data for the specified id is returned instead of the
-       email currently visible in the dom
+       Deprecated function. Migrate to `email_source_async` or `email_source_promise`!
     */
     email_source(email_id: string): string;
     /**
-       Does the same as email_source but accepts a callback and an optional error_callback function
+       Retrieves raw MIME message source from the gmail server for the
+       specified email id. It takes the optional email_id parameter
+       where the data for the specified id is returned instead of the
+       email currently visible in the dom.
+
+       The `callback` is invoked with the resulting data in either
+       string or binary format depending on the value of the
+       `preferBinary`-parameter.
     */
-    email_source_async(email_id: string, callback: (email_source: string) => void, error_callback: (jqxhr, textStatus: string, errorThrown: string) => void): void;
+    email_source_async(email_id: string, callback: (email_source: string | Uint8Array) => void, error_callback?: (jqxhr, textStatus: string, errorThrown: string) => void, preferBinary?: boolean): void;
+    /**
+       Does the same as email_source_async, but uses ES6 promises.
+    */
+    email_source_promise(email_id: string): Promise<string>;
+    email_source_promise(email_id: string, preferBinary: boolean): Promise<Uint8Array>;
+    /**
+     Retrieves the a email/thread data from the server that is currently
+     visible.  The data does not come from the DOM.
+     */
     displayed_email_data(): GmailEmailData;
+    /**
+     Does the same as displayed_email_data, but with a callback instead.
+     */
+    displayed_email_data_async(callback: (gmailEmailData: GmailEmailData) => void): void;
 
 }
 
@@ -345,7 +379,7 @@ interface GmailCheck {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-interface GmailDomEmail {
+interface GmailDomEmailEntry {
     el?: JQuery,
     email: string,
     name: string
@@ -361,9 +395,17 @@ interface GmailDomThread {
     dom(lookup: GmailDomThreadLookup): JQuery,
 }
 
+interface GmailDomAttachment {
+    $el: JQuery,
+    type?: string,
+    name: string,
+    size: string,
+    url?: string
+}
+
 declare type GmailDomEmailLookup =
     "body" | "from" | "to" | "to_wrapper" | "timestamp" | "star"
-    | "reply_button" | "menu_button" | "details_button";
+    | "reply_button" | "menu_button" | "details_button" | "attachments";
 
 interface GmailDomEmail {
     $el: JQuery,
@@ -380,14 +422,19 @@ interface GmailDomEmail {
        Optionally receives email and name properties. If received updates the values in the DOM
        Returns an object containing email & name of the sender and dom element
     */
-    from(email?: string, name?: string): GmailDomEmail;
+    from(email?: string, name?: string): GmailDomEmailEntry;
     /**
        Get/Set who the email is showing as To
        Optionally receives an object containing email and/or name properties. If received updates the values in the DOM.
        Optionally receives an array of these objects if multiple recipients
        Returns an array of objects containing email & name of who is showing in the DOM as the email is to
     */
-    to(to_array: GmailDomEmail | GmailDomEmail[]): GmailDomEmail[];
+    to(to_array: GmailDomEmailEntry | GmailDomEmailEntry[]): GmailDomEmailEntry[];
+    /**
+       Retries the DOM elements which represents the emails attachments
+       Returns undefined if UI-elements are not yet ready for parsing.
+       */
+    attachments(): GmailDomAttachment[];
     /**
        Retrieve relevant email from the Gmail servers for this email
        Makes use of the gmail.get.email_data() method
@@ -414,7 +461,7 @@ interface GmailDomEmail {
 
 declare type GmailDomComposeLookup =
     'to' | 'cc' | 'bcc' | 'id' | 'draft' | 'subject' | 'subjectbox'
-    | 'all_subjects' | 'body' | 'reply' | 'forward' | 'from';
+    | 'all_subjects' | 'body' | 'reply' | 'forward' | 'from' | 'send_button';
 
 declare type GmailDomCompose = {
     $el: JQuery,
@@ -464,6 +511,10 @@ declare type GmailDomCompose = {
        Get/Set the email html body
     */
     body(body?: string): string;
+    /*
+      Triggers the same action as clicking the "send" button would do.
+    */
+    send(): void;
     /**
        Map find through to jquery element
     */
@@ -557,6 +608,17 @@ interface GmailTools {
 
     make_request(link: string, method: GmailHttpRequestMethod, disable_cache: boolean): string;
     make_request_async(link: string, method: GmailHttpRequestMethod, callback: (data: string) => void, disable_cache: boolean);
+
+    /**
+       Creates a request to download user-content from Gmail.
+       This can be used to download email_source or attachments.
+
+       Set `preferBinary` to receive data as an Uint8Array which is unaffected
+       by string-parsing or resolving of text-encoding.
+
+       This is required in order to correctly download attachments!
+    */
+    make_request_download_promise(link: string, preferBinary?: boolean): Promise<string> | Promise<Uint8Array>;
     parse_view_data(view_data: any[]): any[];
     /**
        Adds the yellow info box on top of gmail with the given message
@@ -586,7 +648,20 @@ interface GmailTools {
     extract_name(str: string): string;
     i18n(label: string): string;
     add_toolbar_button(content_html: string, onClickFunction: Function, styleClass: string): JQuery;
+	add_right_toolbar_button(content_html: string, onClickFunction: Function, styleClass: string): JQuery;
     add_compose_button(composeWindow: GmailDomCompose, content_html: string, onClickFunction: Function, styleClass: string): JQuery;
+    /**
+       adds a button to an email attachment.
+
+       'attachment'-parameter must be the object returned from api.dom.email().attachments().
+       'contentHtml' should represent a 21x21 image of some kind. optional.
+       'customCssClass' styling used on the buttons central area. optional.
+       'tooltip' will be shown on hover.
+
+       return-value is jQuery-instance representing the created button.
+    */
+    add_attachment_button(attachment: GmailDomAttachment, contentHtml: string | null, customCssClas: string | null, tooltip: string, onClickFunction: Function);
+
     remove_modal_window(): void;
     add_modal_window(title: string, content_html: string, onClickOk: Function, onClickCancel?: Function, onClickClose?: Function): void;
     /**

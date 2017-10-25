@@ -4,6 +4,8 @@
 // https://github.com/KartikTalwar/gmail.js
 //
 
+/*eslint-env es6*/
+
 var Gmail_ = function(localJQuery) {
 
     /*
@@ -37,7 +39,7 @@ var Gmail_ = function(localJQuery) {
         helper : {get: {}}
     };
 
-    api.version           = "0.6.0";
+    api.version           = "0.6.4";
     api.tracker.globals   = typeof GLOBALS !== "undefined"
         ? GLOBALS
         : (
@@ -225,6 +227,7 @@ var Gmail_ = function(localJQuery) {
     };
 
     api.check.should_compose_fullscreen = function(){
+        console.warn("gmail.js: This function is known to be unreliable, and may be deprecated in a future release.");
         var bx_scfs = [];
         try {
             bx_scfs = api.tracker.globals[17][4][1][151];
@@ -290,6 +293,15 @@ var Gmail_ = function(localJQuery) {
         return tb;
     };
 
+    api.dom.right_toolbar = function() {
+        var rtb = $("[gh='tm'] [gh='s']").parent();
+
+        while($(rtb).children().length === 1){
+            rtb = $(rtb).children().first();
+        }
+
+        return rtb;
+    };
 
     api.check.is_inside_email = function() {
         if(api.get.current_page() !== "email" && !api.check.is_preview_pane()) {
@@ -310,7 +322,7 @@ var Gmail_ = function(localJQuery) {
     };
 
     api.check.is_plain_text = function() {
-        var settings = GLOBALS[17][4][1];
+        var settings = api.tracker.globals[17][4][1];
 
         for (var i = 0; i < settings.length; i++) {
             var plain_text_setting = settings[i];
@@ -352,7 +364,7 @@ var Gmail_ = function(localJQuery) {
 
     api.get.compose_ids = function() {
         var ret = [];
-        var dom = $(".AD [name=draft]");
+        var dom = $(".M9 [name=draft]");
         for(var i = 0; i < dom.length; i++) {
             if(dom[i].value !== "undefined"){
                 ret.push(dom[i].value);
@@ -787,6 +799,7 @@ var Gmail_ = function(localJQuery) {
             break;
 
         case "arl":
+        case "dc_":
             response = [email_ids, params.url, params.body, params.url.acn];
             break;
 
@@ -880,7 +893,7 @@ var Gmail_ = function(localJQuery) {
 
             // prepare response, remove eval protectors
             response = response.replace(/\n/g, " ");
-            response = response.substring(response.indexOf("\"") + 1, response.length);
+            response = response.substring(response.indexOf("'") + 1, response.length);
 
             while(response.replace(/\s/g, "").length > 1) {
 
@@ -891,10 +904,8 @@ var Gmail_ = function(localJQuery) {
                 endIndex = (parseInt(dataLength, 10) - 2) + response.indexOf("[");
                 data = response.substring(response.indexOf("["), endIndex);
 
-                var get_data = new Function("\"use strict\"; return " + data);
-                realData = get_data();
-
-                parsedResponse.push(realData);
+                var json = JSON.parse(data);
+                parsedResponse.push(json);
 
                 // prepare response for next loop
                 response = response.substring(response.indexOf("["), response.length);
@@ -908,6 +919,17 @@ var Gmail_ = function(localJQuery) {
     };
 
     /**
+       parses a download_url attribute from the attachments main span-element.
+     */
+    api.tools.parse_attachment_url = function(url) {
+        var parts = url.split(":");
+        return {
+            type: parts[0],
+            url: parts[2] + ":" + parts[3]
+        };
+    };
+
+    /**
        Node-friendly function to extend objects without depending on jQuery
        (which requires a browser-context)
        */
@@ -915,6 +937,23 @@ var Gmail_ = function(localJQuery) {
         for (var key in extension) {
             target[key] = extension[key];
         }
+    };
+
+    /**
+       Node-friendly function to merge arrays without depending on jQuery
+       (which requires a browser-context).
+
+       All subsequent arrays are merged into the first one, to match
+       $.merge's behaviour.
+    */
+    var merge = function(target, mergee) {
+
+        for (var i=0; i < mergee.length; i++) {
+            var value = mergee[i];
+            target.push(value);
+        }
+
+        return target;
     };
 
     api.tools.parse_requests = function(params, xhr) {
@@ -953,7 +992,16 @@ var Gmail_ = function(localJQuery) {
     api.tools.xhr_watcher = function () {
         if (!api.tracker.xhr_init) {
             api.tracker.xhr_init = true;
-            var win = top.document.getElementById("js_frame") ? top.document.getElementById("js_frame").contentDocument.defaultView : window.opener.top.document.getElementById("js_frame").contentDocument.defaultView;
+            var js_frame = null;
+            if (top.document.getElementById("js_frame")){
+                js_frame = top.document.getElementById("js_frame");
+            } else if (window.opener) {
+                js_frame = window.opener.top.document.getElementById("js_frame");
+            }
+            if (!js_frame){
+                throw "Cannot register the xhr watcher as mail.google.com is not fully loaded yet. Please wrap your code in `gmail.observe.on(\"load\")`";
+            }
+            var win = js_frame.contentDocument.defaultView;
 
             if (!win.gjs_XMLHttpRequest_open) {
                 win.gjs_XMLHttpRequest_open = win.XMLHttpRequest.prototype.open;
@@ -1550,6 +1598,66 @@ var Gmail_ = function(localJQuery) {
             });
     };
 
+    /**
+       Creates a request to download user-content from Gmail.
+       This can be used to download email_source or attachments.
+
+       Set `preferBinary` to receive data as an Uint8Array which is unaffected
+       by string-parsing or resolving of text-encoding.
+
+       This is required in order to correctly download attachments!
+    */
+    api.tools.make_request_download_promise = function (url, preferBinary) {
+        // if we try to download the same email/url several times,
+        // something weird happens with our cookies, causing the 302
+        // redirect to mail-attachment.googleusercontent.com (MAGUC)
+        // to redirect back to mail.google.com.
+        //
+        // mail.google.com does NOT have CORS-headers for MAGUC, so
+        // this redirect (and thus our request) fails.
+        //
+        // Adding a random variable with a constantly changing value defeats
+        // any cache, and seems to solve our problem.
+        const timeStamp = Date.now();
+        url += "&cacheCounter=" + timeStamp;
+
+        let responseType = "text";
+        if (preferBinary) {
+            responseType = "arraybuffer";
+        }
+
+        // now go download!
+        return new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open("GET", url, true);
+            request.responseType = responseType;
+
+            request.onreadystatechange = () => {
+                if (request.readyState !== XMLHttpRequest.DONE) {
+                    return;
+                }
+
+                if (request.status >= 200 && request.status <= 302) {
+                    const result = request.response;
+                    if (result) {
+                        if (preferBinary) {
+                            const byteArray = new Uint8Array(result);
+                            resolve(byteArray);
+                        } else {
+                            // result is regular text!
+                            resolve(result);
+                        }
+                    }
+                }
+            };
+            request.onerror = (ev) => {
+                reject(ev);
+            };
+
+            request.send();
+        });
+    };
+
 
     api.tools.parse_view_data = function(view_data) {
         var parsed = [];
@@ -1630,7 +1738,7 @@ var Gmail_ = function(localJQuery) {
                 cat_label = "group";
                 url += "&cat=^smartlabel_" + cat_label + "&search=category";
             } else {
-                url += "&search=" + "mbox";
+                url += "&search=" + "inbox";
             }
         }else {
             url += "&search=" + page;
@@ -1646,11 +1754,9 @@ var Gmail_ = function(localJQuery) {
             return emails;
         }
 
-        get_data = get_data.substring(get_data.indexOf("["), get_data.length);
-        get_data = "\"use strict\"; return " + get_data;
-        get_data = new Function(get_data);
-
-        api.tracker.view_data = get_data();
+        var data = get_data.substring(get_data.indexOf("["), get_data.length);
+        var json = JSON.parse(data);
+        api.tracker.view_data = json;
 
         for(var i in api.tracker.view_data) {
             if (typeof(api.tracker.view_data[i]) === "function") {
@@ -1659,7 +1765,7 @@ var Gmail_ = function(localJQuery) {
 
             var cdata = api.tools.parse_view_data(api.tracker.view_data[i]);
             if(cdata.length > 0) {
-                $.merge(emails, cdata);
+                merge(emails, cdata);
             }
         }
         return emails;
@@ -1720,27 +1826,29 @@ var Gmail_ = function(localJQuery) {
         return selected_emails;
     };
 
-    api.get.current_page = function() {
-        var hash  = window.location.hash.split("#").pop().split("?").shift() || "inbox";
-        var pages = [
-            "sent", "inbox", "starred", "drafts", "imp", "chats", "all", "spam", "trash",
-            "settings", "label", "category", "circle", "search"
-        ];
 
-        var page = null;
+    api.get.current_page = function(hash) {
+        hash = hash || window.location.hash;
 
-        if($.inArray(hash, pages) > -1) {
-            page = hash;
+        var hashPart  = hash.split("#").pop().split("?").shift() || "inbox";
+
+        if(hashPart.match(/\/[0-9a-f]{16,}$/gi)) {
+            return "email";
         }
 
-        if(hash.indexOf("inbox/") !== -1 || hash.indexOf("sent/") !== -1 || hash.indexOf("all/") !== -1) {
-            page = "email";
-        }
-        else if(hash.match(/\/[0-9a-f]{16,}$/gi)) {
-            page = "email";
-        }
+        var isTwopart = (hashPart.indexOf("search/") === 0
+                         || hashPart.indexOf("category/") === 0
+                         || hashPart.indexOf("label/") === 0);
 
-        return page || hash;
+        var result = null;
+        if (!isTwopart) {
+            result = hashPart.split("/").shift();
+            return result;
+        } else {
+            var parts = hashPart.split("/");
+            result = parts[0] + "/" + parts[1];
+            return result;
+        }
     };
 
 
@@ -1819,7 +1927,7 @@ var Gmail_ = function(localJQuery) {
 
     api.tools.get_reply_to = function(ms13) {
         // reply to is an array if exists
-        var reply_to = (ms13 !== undefined) ? ms13[4] : [];
+        var reply_to = ms13 ? ms13[4] : [];
 
         // if reply to set get email from it and return it
         if (reply_to.length !== 0) {
@@ -1828,6 +1936,35 @@ var Gmail_ = function(localJQuery) {
 
         // otherwise return null
         return null;
+    };
+
+    api.tools.parse_attachment_data = function(x) {
+        if (!x[7] || ! x[7][0])
+        {
+            return null;
+        }
+
+        var baseUrl = "";
+        if (typeof(window) !== "undefined") {
+            baseUrl =  window.location.origin + window.location.pathname;
+        }
+
+        var ad = x[7][0];
+        api.tracker.attachment_data = ad;
+
+        var attachments = [];
+        for (var i = 0; i < ad.length; i++)
+        {
+            var a = ad[i];
+            attachments.push({
+                attachment_id: a[0],
+                name: a[1],
+                type: a[2],
+                size: a[3],
+                url: baseUrl + a[9]
+            });
+        }
+        return attachments;
     };
 
     api.tools.parse_email_data = function(email_data) {
@@ -1851,13 +1988,14 @@ var Gmail_ = function(localJQuery) {
                 }
 
                 data.threads[x[1]] = {};
-                data.threads[x[1]].is_deleted = x[13] ? true : false;
+                data.threads[x[1]].is_deleted = (x[9] && x[9].indexOf("^k") > -1);
                 data.threads[x[1]].reply_to_id = x[2];
                 data.threads[x[1]].from = x[5];
                 data.threads[x[1]].from_email = x[6];
                 data.threads[x[1]].timestamp = x[7];
                 data.threads[x[1]].datetime = x[24];
                 data.threads[x[1]].attachments = x[21].split(",");
+                data.threads[x[1]].attachments_details = x[13] ? api.tools.parse_attachment_data(x[13]) : null;
                 data.threads[x[1]].subject = x[12];
                 data.threads[x[1]].content_html = x[13] ? x[13][6] : x[8];
                 data.threads[x[1]].to = x[13] ? x[13][1] : ((x[37] !== undefined) ? x[37][1]:[]);
@@ -1886,7 +2024,7 @@ var Gmail_ = function(localJQuery) {
 
         var url = null;
         if(email_id !== undefined) {
-            url = window.location.origin + window.location.pathname + "?ui=2&ik=" + api.tracker.ik + "&rid=" + api.tracker.rid + "&view=cv&th=" + email_id + "&msgs=&mb=0&rt=1&search=mbox";
+            url = window.location.origin + window.location.pathname + "?ui=2&ik=" + api.tracker.ik + "&rid=" + api.tracker.rid + "&view=cv&th=" + email_id + "&msgs=&mb=0&rt=1&search=inbox";
         }
         return url;
     };
@@ -1896,13 +2034,10 @@ var Gmail_ = function(localJQuery) {
         if (!get_data) {
             return {};
         }
-        get_data = get_data.substring(get_data.indexOf("["), get_data.length);
-        get_data = "\"use strict\"; return " + get_data;
-        get_data = new Function(get_data);
+        var data = get_data.substring(get_data.indexOf("["), get_data.length);
+        var json = JSON.parse(data);
 
-        var cdata = get_data();
-
-        api.tracker.email_data = cdata[0];
+        api.tracker.email_data = json[0];
         return api.tools.parse_email_data(api.tracker.email_data);
     };
 
@@ -1934,20 +2069,20 @@ var Gmail_ = function(localJQuery) {
 
 
     api.helper.get.email_source_pre = function(email_id) {
-        if(api.check.is_inside_email() && email_id === undefined) {
+        if(!email_id && api.check.is_inside_email()) {
             email_id = api.get.email_id();
         }
 
-        var url = null;
-        if(email_id !== undefined) {
-            url = window.location.origin + window.location.pathname + "?view=att&th=" + email_id + "&attid=0&disp=comp&safe=1&zw";
+        if(!email_id) {
+            return null;
         }
 
-        return url;
+        return window.location.origin + window.location.pathname + "?view=att&th=" + email_id + "&attid=0&disp=comp&safe=1&zw";
     };
 
 
     api.get.email_source = function(email_id) {
+        console.warn("Gmail.js: This function has been deprecated and will be removed in an upcoming release! Please migrate to email_source_async!");
         var url = api.helper.get.email_source_pre(email_id);
         if (url !== null) {
             return api.tools.make_request(url, "GET", true);
@@ -1956,12 +2091,20 @@ var Gmail_ = function(localJQuery) {
     };
 
 
-    api.get.email_source_async = function(email_id, callback, error_callback) {
-        var url = api.helper.get.email_source_pre(email_id);
+    api.get.email_source_async = function(email_id, callback, error_callback, preferBinary) {
+        api.get.email_source_promise(email_id, preferBinary)
+            .then(callback)
+            .catch(error_callback);
+    };
+
+    api.get.email_source_promise = function(email_id, preferBinary) {
+        const url = api.helper.get.email_source_pre(email_id);
         if (url !== null) {
-            api.tools.make_request_async(url, "GET", callback, error_callback, true);
+            return api.tools.make_request_download_promise(url, preferBinary);
         } else {
-            callback("");
+            return new Promise((resolve, reject) => {
+                reject("Unable to resolve URL for email source!");
+            });
         }
     };
 
@@ -1974,6 +2117,17 @@ var Gmail_ = function(localJQuery) {
         else { // Supposing only one displayed email.
             return get_displayed_email_data_for_single_email(email_data);
         }
+    };
+
+    api.get.displayed_email_data_async = function (callback) {
+        api.get.email_data_async(undefined, function (email_data) {
+            if (api.check.is_conversation_view()) {
+                callback(get_displayed_email_data_for_thread(email_data));
+            }
+            else { // Supposing only one displayed email.
+                callback(get_displayed_email_data_for_single_email(email_data));
+            }
+        });
     };
 
     var get_displayed_email_data_for_thread = function(email_data) {
@@ -2068,7 +2222,7 @@ var Gmail_ = function(localJQuery) {
 
 
     api.tools.extract_name = function(str) {
-        var regex = /[a-z"._-\s]+/gi;
+        var regex = /[a-z\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF"._\s-]+/gi;
         var matches = (str) ? str.match(regex) : undefined;
 
         return (matches && matches[0]) ? matches[0].trim() : undefined;
@@ -2121,18 +2275,18 @@ var Gmail_ = function(localJQuery) {
         return dictionary[label];
     };
 
-    api.tools.add_toolbar_button = function(content_html, onClickFunction, styleClass) {
+    var create_generic_toolbar_button = function(content_html, onClickFunction, basicStyle, defaultStyle, styleClass, selector) {
         var container = $(document.createElement("div"));
         container.attr("class","G-Ni J-J5-Ji");
 
         var button = $(document.createElement("div"));
-        var buttonClasses = "T-I J-J5-Ji lS ";
+        var buttonClasses = "T-I J-J5-Ji ";
         if(styleClass !== undefined &&
            styleClass !== null &&
            styleClass !== ""){
-            buttonClasses += styleClass;
+            buttonClasses += basicStyle+styleClass;
         }else{
-            buttonClasses += "T-I-ax7 ar7";
+            buttonClasses += basicStyle+defaultStyle;
         }
         button.attr("class", buttonClasses);
 
@@ -2144,9 +2298,23 @@ var Gmail_ = function(localJQuery) {
 
         container.html(button);
 
-        api.dom.toolbar().append(container);
+        selector.append(container);
 
         return container;
+    };
+
+    api.tools.add_toolbar_button = function(content_html, onClickFunction, styleClass) {
+        var basicLeftStyle = "lS ";
+        var defaultLeftStyle = "T-I-ax7 ar7";
+
+        return create_generic_toolbar_button(content_html, onClickFunction, basicLeftStyle, defaultLeftStyle, styleClass, api.dom.toolbar());
+    };
+
+    api.tools.add_right_toolbar_button = function(content_html, onClickFunction, styleClass) {
+        var basicRightStyle = "ash ";
+        var defaultRightStyle = "T-I-ax7 L3";
+
+        return create_generic_toolbar_button(content_html, onClickFunction, basicRightStyle, defaultRightStyle, styleClass, api.dom.right_toolbar());
     };
 
     api.tools.add_compose_button =  function(composeWindow, content_html, onClickFunction, styleClass) {
@@ -2160,6 +2328,45 @@ var Gmail_ = function(localJQuery) {
         button.click(onClickFunction);
 
         composeWindow.find(".gU.Up  > .J-J5-Ji").append(button);
+
+        return button;
+    };
+
+    /**
+       adds a button to an email attachment.
+
+       'attachment'-parameter must be the object returned from api.dom.email().attachments().
+       'contentHtml' should represent a 21x21 image of some kind. optional.
+       'customCssClass' styling used on the buttons central area. optional.
+       'tooltip' will be shown on hover.
+
+       return-value is jQuery-instance representing the created button.
+       */
+    api.tools.add_attachment_button = function(attachment, contentHtml, customCssClass, tooltip, onClickFunction) {
+        var button = $(document.createElement("div"));
+        button.attr("class", "T-I J-J5-Ji aQv T-I-ax7 L3");
+        button.attr("style", "user-select: none;");
+        button.attr("aria-label", tooltip);
+        button.attr("data-tooltip", tooltip);
+
+        // make hover-state match existing buttons
+        var hoverClass = "T-I-JW";
+        button.mouseover(function() { this.classList.add(hoverClass); });
+        button.mouseout(function() { this.classList.remove(hoverClass); });
+
+        var div = $(document.createElement("div"));
+        var divClass = "wtScjd J-J5-Ji aYr";
+        if (customCssClass) {
+            divClass += " " + customCssClass;
+        }
+        div.attr("class", divClass);
+        if (contentHtml) {
+            div.html(contentHtml);
+        }
+
+        button.append(div);
+        button.click(onClickFunction);
+        attachment.$el.find("div.aQw").append(button);
 
         return button;
     };
@@ -2252,6 +2459,7 @@ var Gmail_ = function(localJQuery) {
 
         center();
 
+        container.bind("DOMSubtreeModified", center);
         $(window).resize(center);
     };
 
@@ -2315,6 +2523,11 @@ var Gmail_ = function(localJQuery) {
        Expects a jQuery DOM element for the compose div
     */
     api.dom.compose = function(element) {
+        if (this.constructor !== api.dom.compose) {
+            // if not invoked through new(), nothing works as expected!
+            return new api.dom.compose(element);
+        }
+
         element = $(element);
         if(!element || (!element.hasClass("M9") && !element.hasClass("AD"))) api.tools.error("api.dom.compose called with invalid element");
         this.$el = element;
@@ -2423,6 +2636,13 @@ var Gmail_ = function(localJQuery) {
         },
 
         /**
+          Triggers the same action as clicking the "send" button would do.
+          */
+        send: function() {
+            return this.dom("send_button").click();
+        },
+
+        /**
            Map find through to jquery element
         */
         find: function(selector) {
@@ -2446,7 +2666,8 @@ var Gmail_ = function(localJQuery) {
                 body: "div[contenteditable=true]",
                 reply: "M9",
                 forward: "M9",
-                from: "input[name=from]"
+                from: "input[name=from]",
+                send_button: "div.T-I.T-I-atl"
             };
             if(!config[lookup]) api.tools.error("Dom lookup failed. Unable to find config for \"" + lookup + "\"",config,lookup,config[lookup]);
             return this.$el.find(config[lookup]);
@@ -2460,6 +2681,11 @@ var Gmail_ = function(localJQuery) {
        Expects a jQuery DOM element for the email div (div.adn as returned by the "view_email" observer), or an email_id
     */
     api.dom.email = function(element) {
+        if (this.constructor !== api.dom.email) {
+            // if not invoked through new(), nothing works as expected!
+            return new api.dom.email(element);
+        }
+
         if (typeof element === "string") {
             this.id = element;
             var message_class_id = "m" + this.id;
@@ -2561,6 +2787,41 @@ var Gmail_ = function(localJQuery) {
         },
 
         /**
+           Retries the DOM elements which represents the emails attachments.
+           Returns undefined if UI-elements are not yet ready for parsing.
+        */
+        attachments: function() {
+            var out = [];
+            var failed = false;
+
+            this.dom("attachments").each(function() {
+                var el = $(this);
+
+                var result = {};
+                result.$el = el;
+                result.name = el.find(".aV3").html();
+                result.size = el.find(".SaH2Ve").html();
+
+                // Gmail only emits the following attribute for Chrome!
+                // use email_data.threads[].attachments_details in other browsers!
+                var url = el.attr("download_url");
+                if (url) {
+                    var url_type = api.tools.parse_attachment_url(url);
+                    result.url = url_type.url;
+                    result.type = url_type.type;
+                }
+
+                out.push(result);
+            });
+
+            if (failed) {
+                return undefined;
+            } else {
+                return out;
+            }
+        },
+
+        /**
            Retrieve relevant email from the Gmail servers for this email
            Makes use of the gmail.get.email_data() method
            Returns an object
@@ -2601,6 +2862,7 @@ var Gmail_ = function(localJQuery) {
                 to_wrapper: "span.hb",
                 timestamp: "span.g3",
                 star: "div.zd",
+                attachments: "div.hq.gt div.aQH span.aZo",
 
                 // buttons
                 reply_button: "div[role=button].aaq",
@@ -2619,6 +2881,11 @@ var Gmail_ = function(localJQuery) {
        Expects a jQuery DOM element for the thread wrapper div (div.if as returned by the "view_thread" observer)
     */
     api.dom.thread = function(element) {
+        if (this.constructor !== api.dom.thread) {
+            // if not invoked through new(), nothing works as expected!
+            return new api.dom.thread(element);
+        }
+
         if (!element || (!element.hasClass("if"))) api.tools.error("api.dom.thread called with invalid element/id");
         this.$el = element;
         return this;

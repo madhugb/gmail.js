@@ -1,8 +1,13 @@
 # Gmail.js - JavaScript API for Gmail
 
 ![Build status](https://api.travis-ci.org/KartikTalwar/gmail.js.svg?branch=master)
+[![npm](https://img.shields.io/npm/v/gmail-js.svg)](https://www.npmjs.com/package/gmail-js)
 
-**Note:** The new Content Security Policy will prevent direct injection. **[Here](https://github.com/KartikTalwar/gmail-chrome-extension-boilerplate)** is how to get around it
+### What Gmail.js is and isn't
+
+Gmail.js is meant to be used for creating WebExtension-based browser-extensions, for Chrome, Firefox and other compatible browsers.
+
+It cannot be used server-side with Node, or from another web-app to interface with Gmail.
 
 **Note:** This is not an official Gmail API, and isn't affiliated with Google.
 
@@ -10,38 +15,35 @@
 
 ### TL;DR Summary
 
-- Lots of api methods to work with gmail. Useful for chrome extensions
-- Most of them dont take arguments, they work on what is currently visible on the screen
-- I still need to add implementation for chrome extension, works by injecting js for now
+- Lots of API methods to work with gmail. See documentation below.
+- Easy to use API. Data & DOM.
+- Reasonably complete TypeScript-support.
+- Many methods are contextual and will work with whatever is on screen when no arguments are given.
+- Obtain email data, react to event, etc. No need for OAuth!
 - Main methods allow you to observe certain events with **`gmail.observe.on('lots_of_actions_here', callback())`** or similar **`gmail.observe.before(...)`** and **`gmail.observe.after(...)`**
-- Click on a method link to view more detailed docs
-- Create an issue/pull request for feedback, requests and
-  fixes. See
-  [CONTRIBUTING.md](https://github.com/KartikTalwar/gmail.js/blob/master/CONTRIBUTING.md) for
-  more details.
-- Basic TypeScript-support from type-declarations file [gmail.d.ts](https://github.com/KartikTalwar/gmail.js/blob/master/src/gmail.d.ts).
+- Create an issue/pull request for feedback, requests and fixes. See [CONTRIBUTING.md](https://github.com/KartikTalwar/gmail.js/blob/master/CONTRIBUTING.md) for more details.
 
-### Installation
+### Using Gmail.js
 
-Since this is a chrome extension library, you can still use npm to get new changes
+If you know how to create WebExtensions-based extensions for Firefox and Chrome, you can get started by pulling Gmail.js like this:
 
 ```
 npm install gmail-js
 ```
 
+**Note:** Please ensure that Gmail.js is injected into the regular DOM.
+Gmail.js does not work as a content-script.
 
-### Examples
+For some ready to use examples/boilerplate repos, look no further:
 
-- **[Gmail Hacks](https://chrome.google.com/webstore/detail/gmail-hacks/aacloklpepaibhlikiakfcgjjappeppo)** by [@arpitnext](https://github.com/arpitnext) (*[Source](https://github.com/arpitnext/play_with_gmail.js)*)
-- **[Example to use gmail.js in firefox addon](https://github.com/rinkudas/gmail-firefox-addon-boilerplate)** - It provides basic functionality to inject gmail.js within gmail for using it in a Firefox addon.
+- **[GmailJS Node Boilerplate](https://github.com/josteink/gmailjs-node-boilerplate)** - Example for how to create a browser-extension using GmailJS and modern javascript with NodeJS and script-bundling for instant load-times.
+- **[GmailJS Legacy Boilerplate](https://github.com/KartikTalwar/gmail-chrome-extension-boilerplate)** - Example for how to create a browser-extension using traditional script-loading. (Requires less tooling, but is less reliable)
 
-## Content Security Policy
+### Content Security Policy
 
+Content Security Policy (CSP) will prevent direct injection. Please see the following repository to get around the policies. More details can also be found in issue [#75](https://github.com/KartikTalwar/gmail.js/issues/75)
 
-The new Content Security Policy will prevent direct injection. Please see the following repository to get around the policies. More details can also be found in issue [#75](https://github.com/KartikTalwar/gmail.js/issues/75)
-
-#### https://github.com/KartikTalwar/gmail-chrome-extension-boilerplate
-
+See the examples linked above for how to get around that.
 
 ## Setup
 
@@ -67,6 +69,17 @@ gmail.get.user_email();
 ```
 
 
+## Typescript
+
+Using gmail-js with TypeScript is relatively easy, but if you use normal `import` syntax it
+will fail. Instead you need to use `require`-syntax to load it:
+
+````typescript
+const GmailFactory = require("gmail-js");
+const gmail = new GmailFactory.Gmail() as Gmail;
+// working on the gmail-object now provides type-safety.
+````
+
 ## Methods
 
 ### Summary (click for more info)
@@ -87,8 +100,9 @@ gmail.get.user_email();
 - [gmail.get**.email_data(email_id=undefined)**](#gmailgetemail_dataemail_idundefined)
 - [gmail.get**.email_data_async(email_id=undefined, callback)**](#gmailgetemail_dataemail_idundefined-callback)
 - [gmail.get**.displayed_email_data()**](#gmailgetdisplayed_email_data)
-- [gmail.get**.email_source(email_id=undefined)**](#gmailgetemail_sourceemail_idundefined)
-- [gmail.get**.email_source_async(email_id=undefined, callback)**](#gmailgetemail_sourceemail_idundefined-callback)
+- [gmail.get**.displayed_email_data_async(callback)**](#gmailgetdisplayed_email_data_asynccallback)
+- [gmail.get**.email_source_async(email_id=undefined, callback, error_callback, preferBinary)**](#gmailgetemail_source_asyncemail_idundefined-callback-error_callback-preferBinaryfalse)
+- [gmail.get**.email_source_promise(email_id=undefined, preferBinary)**](#gmailgetemail_source_promiseemail_idundefined-preferBinaryfalse)
 - [gmail.get**.search_query()**](#gmailgetsearch_query)
 - [gmail.get**.unread_emails()**](#gmailgetunread_emails)
  - [gmail.get**.unread_inbox_emails()**](#gmailgetunread_emails)
@@ -143,12 +157,20 @@ gmail.get.user_email();
 
 
 #### OBSERVE
+It is considered best practice to wait for the gmail interface to be loaded before observing any XHR actions.
+```js
+gmail.observe.on("load", function(){
+    //... now you can safely register other observers using gmail.observe.on
+});
+```
 
 - [gmail.observe**.http_requests()**](#gmailobservehttp_requests)
 - [gmail.observe**.actions()**](#gmailobserveactions)
 - [gmail.observe**.register(action, class/args, parent)**](#gmailobserveregisteraction-classargs-parentnull) - registers a custom DOM observer
 - [gmail.observe**.off(action,type)**](#gmailobserveoffactionnulltypenull)
 - [gmail.observe**.on(action, callback)**](#gmailobserveonaction-callback)
+  - **XHR observers**
+  - **`load`** - When the gmail interface has finished loading
   - **`http_event`** - When gmail any CRUD operation happens on gmail
   - **`poll`** - When gmail automatically polls the server to check for new emails every few seconds
   - **`new_email`** - When a new email appears in the inbox
@@ -186,7 +208,8 @@ gmail.get.user_email();
   - **`compose`** - When a new compose window is opened, or a message is replied to or forwarded
   - **`recipient_change`** - When an email being written (either new compose, reply or forward) has its to, cc or bcc recipients updated
   - **`view_thread`** - When a conversation thread is opened to read
-    - **`view_email`** - Sub-observer to `view_thread`. When an individual email is loaded within a conversation thread
+    - **`view_email`** - Sub-observer to `view_thread`. When an individual email is loaded within a conversation thread.
+      It's worth noting this event is only triggered when the email is actually rendered in the DOM. Gmail tends to cache the rendered emails, so it should not be expected to fire reliably for every viewing of the same email. It will most likely fire once, for the initial and possibly only rendering.
     - **`load_email_menu`** - Sub-observer to `view_thread`. When the dropdown menu next to the reply button is clicked
 - [gmail.observe**.before(action, callback)**](#gmailobservebeforeaction-callback)
 - [gmail.observe**.after(action, callback)**](#gmailobserveafteraction-callback)
@@ -207,6 +230,7 @@ These methods return the DOM data itself
 - gmail.dom**.get_left_sidebar_links()**
 - gmail.dom**.search_bar()**
 - gmail.dom**.toolbar()**
+- gmail.dom**.right_toolbar()**
 - gmail.dom**.compose()** - compose dom object - receives the DOM element for the compose window and provides methods to interact
 - gmail.dom**.composes()** - retrives an array of `gmail.dom.compose` objects representing any open compose windows
 - [gmail.dom**.email()**](#gmaildomemailemail_el-or-email_id) - email dom object - receives an email DOM element or email id for an email currently being viewed. Abstracts interaction with that email.
@@ -229,11 +253,13 @@ These are some helper functions that the rest of the methods use. See source for
 - gmail.tools**.extract_name(str)**
 - gmail.tools**.make_request()**
 - gmail.tools**.make_request_async()**
+- gmail.tools**.make_request_download_promise(url, preferBinary)** - function specialized for downloading email MIME messages or attachments.
 - gmail.tools**.sleep(ms)**
 - gmail.tools**.multitry(ms_delay, tries, func, bool_success_check)**
 - gmail.tools**.i18n(label)**
 - gmail.tools**.toggle_minimize()**
 - [gmail.tools**.add_toolbar_button(content_html, onclick_action, custom_style_class)**](#gmailtoolsadd_toolbar_buttoncontent_html-onclick_action-custom_style_class)
+- [gmail.tools**.add_right_toolbar_button(content_html, onclick_action, custom_style_class)**](#gmailtoolsadd_right_toolbar_buttoncontent_html-onclick_action-custom_style_class)
 - [gmail.tools**.add_compose_button(compose_ref, content_html, onclick_action, custom_style_class)**](#gmailtoolsadd_toolbar_buttoncompose_ref-content_html-onclick_action-custom_style_class)
 - [gmail.tools**.add_modal_window(title, content_html, onClickOk, onClickCancel, onClickClose)**](#gmailtoolsadd_modal_windowtitle-content_html-onClickOk-onClickCancel-onClickClose)
 - [gmail.tools**.remove_modal_window()**](#gmailtoolsremove_modal_window)
@@ -373,13 +399,24 @@ the data for the specified id is returned instead of the email currently visible
       "datetime": "Sun, Nov 20, 2013 at 1:19 AM",
       "content_plain": "another test",
       "subject": "test",
-      "content_html": "<div dir=\"ltr\">another test</div>\n"
+      "content_html": "<div dir=\"ltr\">another test</div>\n",
+      "attachments": [
+          "some_file.pdf"
+      ],
+      "attachments_details": [
+      {
+          "attachment_id": "0.1",
+          "name": "some_file.pdf",
+          "size": 11235,
+          "type": "application/pdf",
+          "url": "https://mail.google.com/u/0/?ui=......"
+      }]
     }
   }
 }
 ```
 
-#### gmail.get.email_data(email_id=undefined, callback)
+#### gmail.get.email_data_async(email_id=undefined, callback)
 
 
 Does the same as above but accepts a callback function
@@ -415,22 +452,55 @@ Returns an object representation of the emails that are being displayed.
       "datetime": "Sun, Nov 20, 2013 at 1:19 AM",
       "content_plain": "another test",
       "subject": "test",
-      "content_html": "<div dir=\"ltr\">another test</div>\n"
+      "content_html": "<div dir=\"ltr\">another test</div>\n",
+      "attachments": [
+          "some_file.pdf"
+      ],
+      "attachments_details": [
+      {
+          "attachment_id": "0.1",
+          "name": "some_file.pdf",
+          "size": 11235,
+          "type": "application/pdf",
+          "url": "https://mail.google.com/u/0/?ui=......"
+      }]
     }
   }
 }
 
 ```
 
+#### gmail.get.displayed_email_data_async(callback)
+
+Does the same as above but accepts a callback function.
+
+
 #### gmail.get.email_source(email_id=undefined)
+
+Deprecated function. Will be removed. Migrate to
+`gmail.get.email_source_async` or `gmail.get.email_source_promise`
+instead.
+
+#### gmail.get.email_source_async(email_id=undefined, callback, error_callback, preferBinary=false)
 
 Retrieves raw MIME message source from the gmail server for the specified email id. It takes the optional email_id parameter where
 the data for the specified id is returned instead of the email currently visible in the dom
 
+By default, once retrieved the resulting data will be passed to
+`callback` in text-format. **This may corrupt the actual email
+MIME-data, by causing irreversible content-encoding
+consistency-errors.**
 
-#### gmail.get.email_source(email_id=undefined, callback)
+If you need to parse this data in a proper MIME-parser later, the only
+way to avoid this kind of error is to download the data in binary
+format and do your own decoding inside your own MIME-parser.
 
-Does the same as above but accepts a callback function
+To get the email-source in binary form, you must set the
+`preferBinary`-parameter to `true`.
+
+#### gmail.get.email_source_promise(email_id=undefined, preferBinary=false)
+
+Does the same as above but implements it using ES6 promises.
 
 
 #### gmail.get.user_email()
@@ -764,7 +834,7 @@ Your callback will be fired directly after Gmail's XMLHttpRequest has been sent 
 
 The on method also supports observering specific DOM events in the Gmail Interface (for example when a new compose window is opened). These are only available via the `on` method (not the `before` or `after` methods).
 
-Some actions/observers also have defined 'sub-observers' which become available if you have an action bound to the parent observer. Sub-observers are defined as such because they only make sense once the parent has been triggered. I.e. for an individual email to display as part of a conversation thread, the thread must first be opened/loaded in the interface.
+Some actions/observers also have defined 'sub-observers' which only (!) become available if you have an action bound to the parent observer. Sub-observers are defined as such because they only make sense once the parent has been triggered. I.e. for an individual email (or several emails) to display as part of a conversation thread, the thread must first be opened/loaded in the interface.
 
 Example usage:
 
@@ -773,7 +843,8 @@ gmail.observe.on('view_thread', function(obj) {
   console.log('view_thread', obj);
 });
 
-// now we have access to the sub observers view_email and load_email_menu
+// now we have access to the sub observers
+and load_email_menu
 gmail.observe.on('view_email', function(obj) {
   console.log('view_email', obj);
 });
@@ -1069,6 +1140,7 @@ Expects a jQuery DOM element for the email div (div.adn as returned by the ``vie
 - **.body([body])** - allows get/set the html body in the DOM
 - **.to([to_array])** - allows retrieve or updating to/from DOM who the email is addressed to
 - **.from([email_address],[name])** - allows get/set who the email is from in the DOM
+- **.attachments()** - retrieves the attachments for the email in the DOM
 - **.data()** - retrieves object of email data from the Gmail servers
 - **.source()** - retrieves the email raw source from the Gmail servers
 - **.dom()** - retrieves the primary element, or other defined elements from the DOM
@@ -1207,6 +1279,16 @@ gmail.tools.add_toolbar_button('content_html', function() {
 }, 'Custom Style Classes');
 ```
 
+#### gmail.tools.add_right_toolbar_button(content_html, onclick_action, custom_style_class)
+
+Add a new button to Gmail Toolbar on the right hand side
+
+```js
+gmail.tools.add_right_toolbar_button('content_html', function() {
+  // Code here
+}, 'Custom Style Classes');
+```
+
 #### gmail.tools.add_compose_button(compose_ref, content_html, onclick_action, custom_style_class)
 
 Add button to compose window.
@@ -1217,6 +1299,33 @@ var compose_ref = gmail.dom.composes()[0];
 gmail.tools.add_compose_button(compose_ref, 'content_html', function() {
   // Code here
 }, 'Custom Style Classes');
+```
+
+#### gmail.tools.add_attachment_button(attachment_ref, content_html, customCssClass, tooltip, onclick_action)
+
+Add a button to an attachment in email-view.
+
+```js
+var emailDom = gmail.dom.email(gmail.get.email_id());
+var attachments = emailDom.attachments();
+
+var iconUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Google_%22G%22_Logo.svg/1024px-Google_%22G%22_Logo.svg.png";
+var html = '<img src="' + iconUrl + '" width="21" height="21" />';
+
+for (let attachment of attachments) {
+    gmail.tools.add_attachment_button(attachment, html, null, "Custom button!", function() {
+        console.log("Attachment " + attachment.name + " clicked!");
+
+        gmail.get.email_data_async(emailDom.id, (data) => {
+            email = data.threads[emailDom.id];
+            attachment_details = email.attachments_details.filter(
+                i => i.name === attachment.name
+            )[0];
+            console.log("This attachment has URL: " + attachment_details.url);
+            // download using api.tools.make_request_download_promise!
+        });
+    });
+}
 ```
 
 #### gmail.tools.add_modal_window(title, content_html, onClickOk, onClickCancel, onClickClose)
